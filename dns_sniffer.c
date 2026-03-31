@@ -1,79 +1,120 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifdef _WIN32
-    #define WIN32_LEAN_AND_MEAN
     #include <winsock2.h>
     #include <ws2tcpip.h>
-    #pragma comment(lib, "ws2_32.lib")
+    #include <windows.h>
+    #include <pcap.h>
 #else
-    #include <unistd.h>
     #include <arpa/inet.h>
-    #include <sys/socket.h>
+    #include <pcap.h>
 #endif
 
-#define BUFFER_SIZE 65535
+#define DNS_PORT 53
 
-void parse_dns_name(unsigned char *buffer, char *output) {
+FILE *logFile;
+
+/* Extract DNS name safely (no OS structs required) */
+void parse_dns_name(const unsigned char *dns, char *output) {
     int pos = 12;
     int j = 0;
 
-    while (buffer[pos] != 0) {
-        int len = buffer[pos++];
+    while (dns[pos] != 0 && pos < 255) {
+        int len = dns[pos++];
+
+        if (len == 0 || len > 63) break;
+
         for (int i = 0; i < len; i++) {
-            output[j++] = buffer[pos++];
+            output[j++] = dns[pos++];
         }
         output[j++] = '.';
     }
 
-    output[j - 1] = '\0';
+    if (j > 0) output[j - 1] = '\0';
+}
+
+/* Extract IPv4 addresses manually from Ethernet frame */
+void extract_ips(const unsigned char *packet, char *src_ip, char *dst_ip) {
+    const unsigned char *ip = packet + 14;
+
+    sprintf(src_ip, "%u.%u.%u.%u",
+        ip[12], ip[13], ip[14], ip[15]);
+
+    sprintf(dst_ip, "%u.%u.%u.%u",
+        ip[16], ip[17], ip[18], ip[19]);
+}
+
+void packet_handler(unsigned char *args,
+                    const struct pcap_pkthdr *header,
+                    const unsigned char *packet) {
+
+    const unsigned char *ip = packet + 14;
+    int ip_header_len = (ip[0] & 0x0F) * 4;
+
+    const unsigned char *udp = packet + 14 + ip_header_len;
+    const unsigned char *dns = udp + 8;
+
+    char domain[256] = {0};
+    char src[32] = {0};
+    char dst[32] = {0};
+
+    extract_ips(packet, src, dst);
+    parse_dns_name(dns, domain);
+
+    time_t now = time(NULL);
+
+    fprintf(logFile, "[%lld] %s -> %s | %s\n", (long long)now, src, dst, domain);
+
+    fflush(logFile);
+
+    printf("DNS: %s -> %s\n", src, domain);
 }
 
 int main() {
+    char errbuf[PCAP_ERRBUF_SIZE];
+
 #ifdef _WIN32
     WSADATA wsa;
-    WSAStartup(MAKEWORD(2, 2), &wsa);
+    WSAStartup(MAKEWORD(2,2), &wsa);
 #endif
 
-    int sock;
-    struct sockaddr_in addr, sender;
-    socklen_t sender_len = sizeof(sender);
-    unsigned char buffer[BUFFER_SIZE];
+    logFile = fopen("dns_log.txt", "w");
 
-    FILE *logFile = fopen("dns_log.txt", "w");
-
-    sock = socket(AF_INET, SOCK_DGRAM, 0);
-
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(53);
-    addr.sin_addr.s_addr = INADDR_ANY;
-
-    bind(sock, (struct sockaddr*)&addr, sizeof(addr));
-
-    printf("[+] DNS Sniffer running...\n");
-
-    while (1) {
-        int bytes = recvfrom(sock, buffer, BUFFER_SIZE, 0,
-                             (struct sockaddr*)&sender, &sender_len);
-
-        if (bytes > 0) {
-            char domain[256] = {0};
-            parse_dns_name(buffer, domain);
-
-            fprintf(logFile, "DNS Query: %s\n", domain);
-            fflush(logFile);
-
-            printf("DNS Query: %s\n", domain);
-        }
+    if (!logFile) {
+        printf("Failed to open log file\n");
+        return 1;
     }
 
+    pcap_t *handle;
+
 #ifdef _WIN32
-    closesocket(sock);
-    WSACleanup();
+    handle = pcap_open_live("\\Device\\NPF_Loopback", 65536, 1, 1000, errbuf);
 #else
-    close(sock);
+    handle = pcap_open_live("any", 65536, 1, 1000, errbuf);
 #endif
 
+    if (!handle) {
+        printf("pcap error: %s\n", errbuf);
+        return 1;
+    }
+
+    struct bpf_program fp;
+    pcap_compile(handle, &fp, "udp port 53", 0, 0);
+    pcap_setfilter(handle, &fp);
+
+    printf("[+] DNS sniffer running...\n");
+
+    pcap_loop(handle, -1, packet_handler, NULL);
+
+    pcap_close(handle);
     fclose(logFile);
+
+#ifdef _WIN32
+    WSACleanup();
+#endif
+
     return 0;
 }
