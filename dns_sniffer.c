@@ -58,6 +58,19 @@ void packet_handler(unsigned char *args,
         return;
     }
 
+    const unsigned char *eth = packet;
+
+    // Ethernet type is bytes 12–13
+    unsigned short eth_type = (eth[12] << 8) | eth[13];
+
+    printf("[DEBUG] EtherType=0x%04x\n", eth_type);
+
+    // Only IPv4
+    if (eth_type != 0x0800) {
+        printf("[SKIP] Not IPv4 Ethernet frame\n");
+        return;
+    }
+
     const unsigned char *ip = packet + 14;
 
     int version = ip[0] >> 4;
@@ -103,7 +116,7 @@ void packet_handler(unsigned char *args,
 
     time_t now = time(NULL);
 
-    fprintf(logFile, "[%lld] %s -> %s | %s\n", (long long)now, src, dst, domain);
+    fprintf(logFile,"[%lld] %s -> %s | %s\n", (long long)now, src, dst, domain);
 
     fflush(logFile);
 }
