@@ -51,22 +51,58 @@ void packet_handler(unsigned char *args,
                     const struct pcap_pkthdr *header,
                     const unsigned char *packet) {
 
+    // Minimum Ethernet + IP header sanity check
+    if (header->caplen < 14 + 20) {
+        return;
+    }
+
     const unsigned char *ip = packet + 14;
+
+    // Ensure IPv4 only
+    int version = ip[0] >> 4;
+    if (version != 4) {
+        return;
+    }
+
+    // Ensure UDP only
+    int protocol = ip[9];
+    if (protocol != 17) {
+        return;
+    }
+
     int ip_header_len = (ip[0] & 0x0F) * 4;
 
+    // Additional safety check
+    if (header->caplen < 14 + ip_header_len + 8) {
+        return;
+    }
+
     const unsigned char *udp = packet + 14 + ip_header_len;
-    const unsigned char *dns = udp + 8;
+
+    int udp_len = 8;
+    const unsigned char *dns = udp + udp_len;
+
+    // Basic DNS sanity check (avoid garbage parsing)
+    if (dns + 12 > packet + header->caplen) {
+        return;
+    }
 
     char domain[256] = {0};
     char src[32] = {0};
     char dst[32] = {0};
 
     extract_ips(packet, src, dst);
+
     parse_dns_name(dns, domain);
 
     time_t now = time(NULL);
 
-    fprintf(logFile, "[%lld] %s -> %s | %s\n", (long long)now, src, dst, domain);
+    fprintf(logFile,
+        "[%lld] %s -> %s | %s\n",
+        (long long)now,
+        src,
+        dst,
+        domain);
 
     fflush(logFile);
 
