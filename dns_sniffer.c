@@ -51,62 +51,61 @@ void packet_handler(unsigned char *args,
                     const struct pcap_pkthdr *header,
                     const unsigned char *packet) {
 
-    // Minimum Ethernet + IP header sanity check
-    if (header->caplen < 14 + 20) {
+    printf("\n[RAW] Packet captured: %d bytes\n", header->caplen);
+
+    if (header->caplen < 14) {
+        printf("[DROP] Too small for Ethernet\n");
         return;
     }
 
     const unsigned char *ip = packet + 14;
 
-    // Ensure IPv4 only
     int version = ip[0] >> 4;
+    int proto = ip[9];
+
+    printf("[DEBUG] IP version=%d protocol=%d\n", version, proto);
+
     if (version != 4) {
+        printf("[SKIP] Not IPv4\n");
         return;
     }
 
-    // Ensure UDP only
-    int protocol = ip[9];
-    if (protocol != 17) {
+    if (proto != 17) {
+        printf("[SKIP] Not UDP\n");
         return;
     }
 
     int ip_header_len = (ip[0] & 0x0F) * 4;
 
-    // Additional safety check
     if (header->caplen < 14 + ip_header_len + 8) {
+        printf("[DROP] Truncated UDP packet\n");
         return;
     }
 
     const unsigned char *udp = packet + 14 + ip_header_len;
+    const unsigned char *dns = udp + 8;
 
-    int udp_len = 8;
-    const unsigned char *dns = udp + udp_len;
-
-    // Basic DNS sanity check (avoid garbage parsing)
-    if (dns + 12 > packet + header->caplen) {
-        return;
-    }
+    printf("[DEBUG] Reached DNS layer\n");
 
     char domain[256] = {0};
     char src[32] = {0};
     char dst[32] = {0};
 
     extract_ips(packet, src, dst);
-
     parse_dns_name(dns, domain);
+
+    if (strlen(domain) == 0) {
+        printf("[SKIP] Empty DNS name\n");
+        return;
+    }
+
+    printf("[DNS] %s -> %s\n", src, domain);
 
     time_t now = time(NULL);
 
-    fprintf(logFile,
-        "[%lld] %s -> %s | %s\n",
-        (long long)now,
-        src,
-        dst,
-        domain);
+    fprintf(logFile, "[%lld] %s -> %s | %s\n", (long long)now, src, dst, domain);
 
     fflush(logFile);
-
-    printf("DNS: %s -> %s\n", src, domain);
 }
 
 int main() {
