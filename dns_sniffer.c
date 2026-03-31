@@ -71,21 +71,17 @@ void packet_handler(unsigned char *args,
         return;
     }
 
-    const unsigned char *ip = packet + 14;
+    const unsigned char *ip = packet;
 
-    int version = ip[0] >> 4;
-    int proto = ip[9];
+    // Auto detect IPv4
+    if ((ip[0] >> 4) != 4) {
+        // try Ethernet fallback
+        ip = packet + 14;
 
-    printf("[DEBUG] IP version=%d protocol=%d\n", version, proto);
-
-    if (version != 4) {
-        printf("[SKIP] Not IPv4\n");
-        return;
-    }
-
-    if (proto != 17) {
-        printf("[SKIP] Not UDP\n");
-        return;
+        if ((ip[0] >> 4) != 4) {
+            printf("[SKIP] Cannot locate IPv4 header\n");
+            return;
+        }
     }
 
     int ip_header_len = (ip[0] & 0x0F) * 4;
